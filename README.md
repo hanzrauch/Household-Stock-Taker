@@ -1,60 +1,74 @@
 # Household Stock Taker
 
-A small self-hosted web app for tracking what's in stock around the house.
-Scan a barcode with your phone's camera, get product info auto-filled from
-[Open Food Facts](https://world.openfoodfacts.org/), and log what gets used
-and purchased so the app can tell you **roughly how many days of stock you
-have left** and flag items as low before you run out.
+A small web app for tracking what's in stock around the house. Scan a
+barcode with your phone's camera, get product info auto-filled from
+[Open Food Facts](https://world.openfoodfacts.org/), and log what gets
+used and purchased so the app can tell you **roughly how many days of
+stock you have left** and flag items as low before you run out.
 
-Runs as a single Node process with a SQLite file — no build step on the
-frontend, no external services besides the (optional) barcode lookup.
+Runs as a [Cloudflare Worker](https://workers.cloudflare.com/) backed by
+a [D1](https://developers.cloudflare.com/d1/) (SQLite) database, so it
+syncs across every device that opens the same URL.
 
 ## Features
 
-- **Item catalogue** — name, brand, category, quantity, unit, package size,
-  image, notes, and a per-item reorder threshold.
+- **Item catalogue** — name, brand, category, quantity, unit, package
+  size, image, notes, and a per-item reorder threshold.
 - **Quantity adjustments are logged** — every +/- has a reason
-  (`purchased`, `consumed`, `adjustment`, `initial`) and a timestamp, so the
-  app can compute a per-day usage rate and estimated days remaining.
-- **Barcode scanning** via `@zxing/browser` using the device camera.
-- **Product lookup** — the server proxies `/api/lookup/:barcode` to Open
+  (`purchased`, `consumed`, `adjustment`, `initial`) and a timestamp, so
+  the app can compute a per-day usage rate and estimated days remaining.
+- **Barcode scanning** via `@zxing/browser` using the device camera
+  (loaded from jsDelivr; no bundling).
+- **Product lookup** — the Worker proxies `/api/lookup/:barcode` to Open
   Food Facts and pre-fills the add-item form with name, brand, category,
   package size, and image.
-- **Low-stock view** — filter to just the items at or below their reorder
-  threshold; stats in the header show totals, low, and out-of-stock counts.
+- **Low-stock view** — filter to just the items at or below their
+  reorder threshold; stats in the header show totals, low, and
+  out-of-stock counts.
 
-## Requirements
+## Deploying to Cloudflare
 
-- Node.js 20 or newer
-- A modern browser (the barcode scanner needs `getUserMedia`, which requires
-  either `localhost` or HTTPS)
-
-## Install & run
+You'll need a Cloudflare account (the free tier is plenty) and Node 20+.
 
 ```bash
 npm install
-npm start
+npx wrangler login                    # one-time browser auth
+npx wrangler d1 create household_stock
 ```
 
-Then open http://localhost:3000.
+The `d1 create` step prints a `database_id`. Copy it into `wrangler.toml`,
+replacing `REPLACE_WITH_YOUR_D1_ID`.
 
-Use `npm run dev` for auto-reload on server changes.
+Then apply the schema and deploy:
 
-### Using it from your phone
+```bash
+npm run db:migrate   # applies migrations/*.sql to the remote D1
+npm run deploy       # publishes the Worker
+```
 
-The scanner only works over `localhost` or HTTPS. The simplest options:
+Wrangler prints a `*.workers.dev` URL — that's the app. It's open to
+anyone who knows the URL; add a custom domain and Cloudflare Access if
+you want to lock it down later.
 
-- **Same machine as server**: just open `localhost:3000`.
-- **Phone on the same LAN**: run behind an HTTPS reverse proxy (Caddy,
-  nginx, Tailscale Funnel, `ngrok http 3000`, etc.) and load the HTTPS URL.
+## Local development
+
+`wrangler dev` runs the Worker locally against a local SQLite-backed D1
+emulator. No Cloudflare account is required for this part.
+
+```bash
+npm install
+npm run db:migrate:local   # one-time, creates the local D1
+npm run dev                # serves on http://localhost:8787
+```
+
+The scanner needs `getUserMedia`, which requires either `localhost` or
+HTTPS, so use `localhost:8787` on your desktop. On a phone, use the
+deployed `*.workers.dev` URL (it's HTTPS automatically).
 
 ## Data
 
-Everything lives in a single SQLite file at `./data/stock.db` (auto-created
-on first launch). Back it up by copying that file. The `data/` directory is
-git-ignored.
-
-### Schema
+Stored in Cloudflare D1 in two tables. The same schema is used locally
+(in `.wrangler/state/`) and remotely.
 
 **`items`**
 
@@ -87,10 +101,10 @@ git-ignored.
 
 ### Usage-rate math
 
-For each item the server looks at the last 30 days of `usage_log` entries,
-sums the consumed quantity, and divides by the span between the first log
-entry in the window and now (clamped to ≥ 1 day). The estimated days
-remaining is `floor(current quantity / per-day rate)`.
+For each item the Worker looks at the last 30 days of `usage_log`
+entries, sums the consumed quantity, and divides by the span between the
+first log entry in the window and now (clamped to ≥ 1 day). The
+estimated days remaining is `floor(current quantity / per-day rate)`.
 
 ## HTTP API
 
@@ -109,22 +123,22 @@ remaining is `floor(current quantity / per-day rate)`.
 ## Source layout
 
 ```
-server.js           Express server + all API routes
-db.js               SQLite schema + connection
-public/
-  index.html        single-page UI
+src/index.js           Hono app running on Workers; all API routes
+migrations/*.sql       D1 schema migrations
+wrangler.toml          Cloudflare Worker + D1 + static assets bindings
+public/                Static SPA (served by the ASSETS binding)
+  index.html
+  app.js               list view, forms, scanner, detail/history modal
   styles.css
-  app.js            list view, forms, scanner, detail/history modal
-data/stock.db       SQLite database (created at runtime)
 ```
 
 ## Notes & limitations
 
-- The Open Food Facts API is free but rate-limits aggressively from shared
-  IPs. Running from a residential connection is fine; if a lookup fails the
-  UI just falls back to manual entry.
-- Open Food Facts skews toward groceries and household products. Items not
-  in its database (cleaning supplies from a regional chain, for instance)
-  can still be added by hand with the barcode recorded.
-- This is a single-user app with no authentication. Put it behind a VPN or
-  a reverse-proxy with basic auth if you expose it beyond your LAN.
+- No authentication. Anyone with the URL can see and edit the inventory.
+  Fine for the "household dashboard" use case; put Cloudflare Access in
+  front of the Worker if that changes.
+- Open Food Facts skews toward groceries and household products. Items
+  not in its database (cleaning supplies from a regional chain, for
+  instance) can still be added by hand with the barcode recorded.
+- D1 does not support interactive transactions; the quantity-adjust
+  endpoint uses `DB.batch()` which is atomic for its statement list.
