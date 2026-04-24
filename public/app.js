@@ -50,6 +50,37 @@ const api = {
     try { return await (await fetch('/api/categories')).json(); }
     catch { return []; }
   },
+  async categoriesManage() {
+    return (await fetch('/api/categories/manage')).json();
+  },
+  async createCategory(name) {
+    const r = await fetch('/api/categories', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (!r.ok) throw new Error((await r.json()).error || 'create failed');
+    return r.json();
+  },
+  async renameCategory(oldName, newName) {
+    const r = await fetch(`/api/categories/${encodeURIComponent(oldName)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName }),
+    });
+    if (!r.ok) throw new Error((await r.json()).error || 'rename failed');
+    return r.json();
+  },
+  async deleteCategory(name, opts = {}) {
+    const u = new URL(`/api/categories/${encodeURIComponent(name)}`, location.origin);
+    if (opts.clearItems) u.searchParams.set('clearItems', 'true');
+    if (opts.reassignTo) u.searchParams.set('reassignTo', opts.reassignTo);
+    const r = await fetch(u, { method: 'DELETE' });
+    if (!r.ok && r.status !== 204) {
+      const body = await r.json().catch(() => ({}));
+      const err = new Error(body.error || 'delete failed');
+      err.status = r.status; err.body = body;
+      throw err;
+    }
+  },
 };
 
 // --- element references --------------------------------------------------
@@ -74,6 +105,11 @@ const els = {
   imageUrlInput: $('#imageUrlInput'),
   categorySelect: $('#categorySelect'),
   packageSizeLabel: $('#packageSizeLabel'),
+  manageBtn: $('#manageCategoriesBtn'),
+  categoriesModal: $('#categoriesModal'),
+  categoriesList: $('#categoriesList'),
+  newCategoryInput: $('#newCategoryInput'),
+  addCategoryBtn: $('#addCategoryBtn'),
   detailModal: $('#detailModal'),
   detailContent: $('#detailContent'),
   scanModal: $('#scanModal'),
@@ -575,6 +611,109 @@ async function handleScanned(barcode, { reopenFormAfter = false } = {}) {
 }
 
 els.scanModal.addEventListener('close', stopScanner);
+
+// --- manage categories --------------------------------------------------
+
+async function openManageCategories() {
+  els.categoriesModal.showModal();
+  els.newCategoryInput.value = '';
+  await renderManageList();
+}
+
+async function renderManageList() {
+  const rows = await api.categoriesManage();
+  if (!rows.length) {
+    els.categoriesList.innerHTML = '<li class="empty-row">No categories yet.</li>';
+    return;
+  }
+  els.categoriesList.innerHTML = rows.map((r) => `
+    <li data-name="${escapeHtml(r.name)}" class="${r.managed ? '' : 'orphan'}">
+      <div class="cat-main">
+        <span class="cat-name">${escapeHtml(r.name)}</span>
+        <span class="cat-count">${r.count} item${r.count === 1 ? '' : 's'}${r.managed ? '' : ' · unmanaged'}</span>
+      </div>
+      <div class="cat-actions">
+        <button type="button" data-act="rename" aria-label="Rename ${escapeHtml(r.name)}">Rename</button>
+        <button type="button" data-act="delete" class="danger" aria-label="Delete ${escapeHtml(r.name)}">Delete</button>
+      </div>
+    </li>
+  `).join('');
+  els.categoriesList.querySelectorAll('button[data-act]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const li = btn.closest('li');
+      const name = li.dataset.name;
+      if (btn.dataset.act === 'rename') handleRenameCategory(name);
+      if (btn.dataset.act === 'delete') handleDeleteCategory(name);
+    });
+  });
+}
+
+async function handleAddCategory() {
+  const name = (els.newCategoryInput.value || '').trim();
+  if (!name) return;
+  try {
+    await api.createCategory(name);
+    els.newCategoryInput.value = '';
+    toast(`Added "${name}"`);
+    await renderManageList();
+    await refreshCategories();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+async function handleRenameCategory(oldName) {
+  const newName = (prompt(`Rename "${oldName}" to:`, oldName) || '').trim();
+  if (!newName || newName === oldName) return;
+  try {
+    await api.renameCategory(oldName, newName);
+    toast(`Renamed to "${newName}"`);
+    await renderManageList();
+    await refreshCategories();
+    await refresh();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+async function handleDeleteCategory(name) {
+  try {
+    // First try a plain delete. The server returns 409 with a count if
+    // items still use it, and we ask the user what to do.
+    try {
+      await api.deleteCategory(name);
+    } catch (err) {
+      if (err.status !== 409) throw err;
+      const count = err.body?.count || 0;
+      const choice = prompt(
+        `"${name}" is used by ${count} item${count === 1 ? '' : 's'}. ` +
+        `Type a category name to reassign them to, leave blank to uncategorize, or type "cancel" to abort:`,
+        '',
+      );
+      if (choice == null) return;
+      const trimmed = choice.trim();
+      if (trimmed.toLowerCase() === 'cancel') return;
+      if (trimmed) {
+        await api.deleteCategory(name, { reassignTo: trimmed });
+      } else {
+        await api.deleteCategory(name, { clearItems: true });
+      }
+    }
+    toast(`Deleted "${name}"`);
+    state.categories.delete(name);
+    await renderManageList();
+    await refreshCategories();
+    await refresh();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+els.manageBtn.addEventListener('click', openManageCategories);
+els.addCategoryBtn.addEventListener('click', handleAddCategory);
+els.newCategoryInput.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter') { ev.preventDefault(); handleAddCategory(); }
+});
 
 // --- boot ---------------------------------------------------------------
 

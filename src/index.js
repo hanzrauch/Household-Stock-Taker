@@ -90,10 +90,122 @@ app.get('/api/items', async (c) => {
 });
 
 app.get('/api/categories', async (c) => {
+  // Union of the managed categories table and categories currently in
+  // use on items. That way items tagged with a not-yet-registered
+  // category (older data, or someone added via another channel) still
+  // show up in the dropdowns.
   const { results } = await c.env.DB
-    .prepare(`SELECT DISTINCT category FROM items WHERE category IS NOT NULL AND category != '' ORDER BY category COLLATE NOCASE`)
+    .prepare(
+      `SELECT name FROM (
+         SELECT name FROM categories
+         UNION
+         SELECT category AS name FROM items
+          WHERE category IS NOT NULL AND category != ''
+       ) ORDER BY name COLLATE NOCASE`,
+    )
     .all();
-  return c.json(results.map((r) => r.category));
+  return c.json(results.map((r) => r.name));
+});
+
+app.get('/api/categories/manage', async (c) => {
+  const { results } = await c.env.DB
+    .prepare(
+      `SELECT c.name AS name,
+              (SELECT COUNT(*) FROM items i WHERE i.category = c.name) AS count,
+              1 AS managed
+         FROM categories c
+         UNION ALL
+         SELECT DISTINCT i.category AS name,
+                (SELECT COUNT(*) FROM items i2 WHERE i2.category = i.category) AS count,
+                0 AS managed
+         FROM items i
+        WHERE i.category IS NOT NULL AND i.category != ''
+          AND i.category NOT IN (SELECT name FROM categories)
+        ORDER BY name COLLATE NOCASE`,
+    )
+    .all();
+  return c.json(
+    results.map((r) => ({ name: r.name, count: r.count, managed: !!r.managed })),
+  );
+});
+
+app.post('/api/categories', async (c) => {
+  const { name } = (await c.req.json().catch(() => ({}))) || {};
+  const trimmed = String(name || '').trim();
+  if (!trimmed) return c.json({ error: 'name is required' }, 400);
+  try {
+    await c.env.DB
+      .prepare('INSERT OR IGNORE INTO categories (name) VALUES (?)')
+      .bind(trimmed)
+      .run();
+    return c.json({ name: trimmed }, 201);
+  } catch (err) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+app.put('/api/categories/:name', async (c) => {
+  const oldName = decodeURIComponent(c.req.param('name'));
+  const { name } = (await c.req.json().catch(() => ({}))) || {};
+  const newName = String(name || '').trim();
+  if (!newName) return c.json({ error: 'new name is required' }, 400);
+  if (newName === oldName) return c.json({ name: newName });
+
+  // If a row with newName already exists, merge: drop oldName, point
+  // items to newName. Otherwise rename in place.
+  const target = await c.env.DB
+    .prepare('SELECT name FROM categories WHERE name = ?')
+    .bind(newName)
+    .first();
+
+  const stmts = [
+    c.env.DB.prepare('UPDATE items SET category = ?, updated_at = datetime(\'now\') WHERE category = ?').bind(newName, oldName),
+  ];
+  if (target) {
+    stmts.push(c.env.DB.prepare('DELETE FROM categories WHERE name = ?').bind(oldName));
+  } else {
+    stmts.push(c.env.DB.prepare('UPDATE categories SET name = ? WHERE name = ?').bind(newName, oldName));
+  }
+  await c.env.DB.batch(stmts);
+  return c.json({ name: newName });
+});
+
+app.delete('/api/categories/:name', async (c) => {
+  const name = decodeURIComponent(c.req.param('name'));
+  const clearItems = c.req.query('clearItems') === 'true';
+  const reassignTo = c.req.query('reassignTo') || null;
+
+  const countRow = await c.env.DB
+    .prepare('SELECT COUNT(*) AS n FROM items WHERE category = ?')
+    .bind(name)
+    .first();
+  const inUse = Number(countRow?.n || 0);
+
+  if (inUse > 0 && !clearItems && !reassignTo) {
+    return c.json({
+      error: 'category is in use',
+      count: inUse,
+      hint: 'pass ?clearItems=true or ?reassignTo=<name> to resolve',
+    }, 409);
+  }
+
+  const stmts = [];
+  if (reassignTo) {
+    stmts.push(
+      c.env.DB
+        .prepare('UPDATE items SET category = ?, updated_at = datetime(\'now\') WHERE category = ?')
+        .bind(reassignTo, name),
+    );
+  } else if (clearItems) {
+    stmts.push(
+      c.env.DB
+        .prepare('UPDATE items SET category = NULL, updated_at = datetime(\'now\') WHERE category = ?')
+        .bind(name),
+    );
+  }
+  stmts.push(c.env.DB.prepare('DELETE FROM categories WHERE name = ?').bind(name));
+  await c.env.DB.batch(stmts);
+  return new Response(null, { status: 204 });
 });
 
 app.get('/api/items/:id', async (c) => {

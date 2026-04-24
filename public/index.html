@@ -25,6 +25,7 @@
       <select id="categoryFilter" aria-label="Filter by category">
         <option value="">All categories</option>
       </select>
+      <button id="manageCategoriesBtn" class="link-button" aria-label="Manage categories">Manage</button>
       <label class="toggle">
         <input type="checkbox" id="lowOnly"> Low stock only
       </label>
@@ -107,6 +108,25 @@
       <button type="button" class="close" data-close aria-label="Close">&times;</button>
     </header>
     <article id="detailContent"></article>
+    <footer class="modal-footer">
+      <button type="button" class="link" data-close>Close</button>
+    </footer>
+  </dialog>
+
+  <!-- Manage categories modal -->
+  <dialog id="categoriesModal" class="modal">
+    <header>
+      <h2>Manage categories</h2>
+      <button type="button" class="close" data-close aria-label="Close">&times;</button>
+    </header>
+    <article>
+      <div class="manage-add">
+        <input type="text" id="newCategoryInput" placeholder="New category name" autocomplete="off">
+        <button type="button" id="addCategoryBtn" class="primary">Add</button>
+      </div>
+      <ul id="categoriesList" class="categories-list"></ul>
+      <p class="hint">Renaming propagates to every item using that category. Deleting a category in use will prompt you to clear or reassign first.</p>
+    </article>
     <footer class="modal-footer">
       <button type="button" class="link" data-close>Close</button>
     </footer>
