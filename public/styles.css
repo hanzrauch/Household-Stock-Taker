@@ -358,9 +358,26 @@ button.link:hover { color: var(--text); background: var(--bg); }
 .cat-main { flex: 1; min-width: 0; }
 .cat-name { display: block; font-weight: 500; }
 .cat-count { display: block; font-size: 0.8rem; color: var(--muted); }
-.cat-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
+.cat-actions { display: flex; gap: 0.4rem; flex-shrink: 0; align-items: center; }
 .cat-actions button { font-size: 0.85rem; padding: 0.35rem 0.65rem; }
-.cat-actions button.danger { color: var(--danger); border-color: var(--danger); }
+.cat-actions button.icon-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  font-size: 1.3rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.cat-actions button.icon-btn:hover,
+.cat-actions button.icon-btn:active {
+  background: var(--danger);
+  color: white;
+}
 
 .hint { font-size: 0.8rem; color: var(--muted); margin: 0.75rem 0 0; }
 

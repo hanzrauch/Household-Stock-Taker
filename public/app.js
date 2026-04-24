@@ -634,7 +634,7 @@ async function renderManageList() {
       </div>
       <div class="cat-actions">
         <button type="button" data-act="rename" aria-label="Rename ${escapeHtml(r.name)}">Rename</button>
-        <button type="button" data-act="delete" class="danger" aria-label="Delete ${escapeHtml(r.name)}">Delete</button>
+        <button type="button" data-act="delete" class="danger icon-btn" aria-label="Delete ${escapeHtml(r.name)}" title="Delete">&times;</button>
       </div>
     </li>
   `).join('');
