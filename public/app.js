@@ -288,7 +288,6 @@ function openItemForm(prefill = {}, editingId = null) {
   showImage(prefill.imageUrl || '');
 
   els.itemModal.showModal();
-  form.elements.name.focus();
 }
 
 els.addBtn.addEventListener('click', () => openItemForm());
