@@ -6,6 +6,12 @@
   <meta name="theme-color" content="#0f766e">
   <title>Household Stock Taker</title>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icon.svg">
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Stock Taker">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 </head>
 <body>
   <header class="app-header">
@@ -16,11 +22,13 @@
   <main>
     <section class="toolbar">
       <input id="search" type="search" placeholder="Search name, brand or barcode..." autocomplete="off">
+      <select id="categoryFilter" aria-label="Filter by category">
+        <option value="">All categories</option>
+      </select>
       <label class="toggle">
         <input type="checkbox" id="lowOnly"> Low stock only
       </label>
       <button id="addBtn" class="primary">+ Add item</button>
-      <button id="scanBtn">Scan barcode</button>
     </section>
 
     <section id="itemList" class="item-list" aria-live="polite"></section>
@@ -32,46 +40,60 @@
     <form method="dialog" id="itemForm">
       <header>
         <h2 id="itemModalTitle">Add item</h2>
+        <button type="button" class="close" data-close aria-label="Close">&times;</button>
       </header>
-      <div class="grid">
-        <label>Barcode
-          <input name="barcode" type="text" inputmode="numeric">
-        </label>
-        <label class="span-2">Name *
-          <input name="name" type="text" required>
-        </label>
-        <label>Brand
-          <input name="brand" type="text">
-        </label>
-        <label>Category
-          <input name="category" type="text">
-        </label>
-        <label>Quantity
-          <input name="quantity" type="number" step="any" value="0" min="0">
-        </label>
-        <label>Unit
-          <input name="unit" type="text" value="items" list="unit-list">
-          <datalist id="unit-list">
-            <option>items</option><option>bottles</option><option>cans</option>
-            <option>boxes</option><option>packs</option><option>rolls</option>
-            <option>ml</option><option>l</option><option>g</option><option>kg</option>
-          </datalist>
-        </label>
-        <label>Min. quantity (reorder at)
-          <input name="minQuantity" type="number" step="any" value="1" min="0">
-        </label>
-        <label>Package size
-          <input name="packageSize" type="text" placeholder="e.g. 500 ml">
-        </label>
-        <label class="span-2">Image URL
-          <input name="imageUrl" type="url">
-        </label>
-        <label class="span-2">Notes
-          <textarea name="notes" rows="2"></textarea>
-        </label>
+
+      <div class="form-body">
+        <div class="scan-row">
+          <button type="button" id="formScanBtn" class="scan-chip">
+            <span aria-hidden="true">📷</span> Scan barcode
+          </button>
+          <div id="formBarcode" class="barcode-display" hidden></div>
+        </div>
+
+        <div class="image-picker">
+          <div class="image-preview" id="imagePreview">
+            <span class="placeholder">No image</span>
+          </div>
+          <div class="image-actions">
+            <label class="btn">
+              Take photo
+              <input type="file" name="imageFile" accept="image/*" capture="environment" hidden>
+            </label>
+            <label class="btn">
+              Choose photo
+              <input type="file" name="imageFile2" accept="image/*" hidden>
+            </label>
+            <button type="button" class="btn link" id="imageClear" hidden>Remove</button>
+          </div>
+          <input type="hidden" name="imageUrl" id="imageUrlInput">
+        </div>
+
+        <div class="grid">
+          <label class="span-2">Name *
+            <input name="name" type="text" required autocomplete="off">
+          </label>
+          <label>Brand
+            <input name="brand" type="text" autocomplete="off">
+          </label>
+          <label>Category
+            <input name="category" type="text" list="category-list" autocomplete="off">
+            <datalist id="category-list"></datalist>
+          </label>
+          <label>Quantity
+            <input name="quantity" type="number" step="any" value="0" min="0">
+          </label>
+          <label>Min. quantity (reorder at)
+            <input name="minQuantity" type="number" step="any" value="1" min="0">
+          </label>
+          <label class="span-2" id="packageSizeLabel" hidden>Package size
+            <input name="packageSize" type="text" readonly>
+          </label>
+        </div>
       </div>
+
       <footer class="modal-footer">
-        <button type="button" class="link" id="itemCancel">Cancel</button>
+        <button type="button" class="link" data-close>Cancel</button>
         <button type="submit" class="primary" id="itemSave">Save</button>
       </footer>
     </form>
@@ -79,22 +101,28 @@
 
   <!-- Item detail modal -->
   <dialog id="detailModal" class="modal">
+    <header>
+      <h2>Item</h2>
+      <button type="button" class="close" data-close aria-label="Close">&times;</button>
+    </header>
     <article id="detailContent"></article>
     <footer class="modal-footer">
-      <button type="button" class="link" id="detailClose">Close</button>
+      <button type="button" class="link" data-close>Close</button>
     </footer>
   </dialog>
 
   <!-- Scanner modal -->
   <dialog id="scanModal" class="modal scan">
-    <header><h2>Scan barcode</h2></header>
+    <header>
+      <h2>Scan barcode</h2>
+      <button type="button" class="close" data-close aria-label="Close">&times;</button>
+    </header>
     <div class="scanner">
       <video id="scanVideo" playsinline muted></video>
       <p id="scanStatus" class="scan-status">Point the camera at a barcode.</p>
     </div>
     <footer class="modal-footer">
-      <select id="scanCamera"></select>
-      <button type="button" class="link" id="scanClose">Close</button>
+      <button type="button" class="link" data-close>Close</button>
     </footer>
   </dialog>
 

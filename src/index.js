@@ -67,6 +67,7 @@ async function attachUsage(DB, items) {
 app.get('/api/items', async (c) => {
   const q = (c.req.query('q') || '').trim();
   const lowOnly = c.req.query('low') === '1';
+  const category = (c.req.query('category') || '').trim();
 
   let sql = 'SELECT * FROM items';
   const where = [];
@@ -75,6 +76,10 @@ app.get('/api/items', async (c) => {
     where.push('(name LIKE ? OR brand LIKE ? OR barcode = ? OR category LIKE ?)');
     params.push(`%${q}%`, `%${q}%`, q, `%${q}%`);
   }
+  if (category) {
+    where.push('category = ?');
+    params.push(category);
+  }
   if (lowOnly) where.push('quantity <= min_quantity');
   if (where.length) sql += ' WHERE ' + where.join(' AND ');
   sql += ' ORDER BY (quantity <= min_quantity) DESC, name COLLATE NOCASE';
@@ -82,6 +87,13 @@ app.get('/api/items', async (c) => {
   const { results } = await c.env.DB.prepare(sql).bind(...params).all();
   const items = await attachUsage(c.env.DB, results.map(rowToItem));
   return c.json(items);
+});
+
+app.get('/api/categories', async (c) => {
+  const { results } = await c.env.DB
+    .prepare(`SELECT DISTINCT category FROM items WHERE category IS NOT NULL AND category != '' ORDER BY category COLLATE NOCASE`)
+    .all();
+  return c.json(results.map((r) => r.category));
 });
 
 app.get('/api/items/:id', async (c) => {

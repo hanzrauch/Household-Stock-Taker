@@ -1,5 +1,9 @@
-// Household Stock Taker - frontend
-// Uses @zxing/browser (loaded via /vendor/*) for camera barcode scanning.
+// Household Stock Taker - frontend.
+
+const DEFAULT_CATEGORIES = [
+  'Pantry', 'Fridge', 'Freezer', 'Drinks', 'Snacks',
+  'Cleaning', 'Laundry', 'Bathroom', 'Medicine', 'Baby', 'Pets', 'Other',
+];
 
 const api = {
   async list(params = {}) {
@@ -42,35 +46,44 @@ const api = {
     return { ok: r.ok, status: r.status, body: await r.json().catch(() => ({})) };
   },
   async stats() { return (await fetch('/api/stats')).json(); },
+  async categories() {
+    try { return await (await fetch('/api/categories')).json(); }
+    catch { return []; }
+  },
 };
 
-// --- UI plumbing --------------------------------------------------------
+// --- element references --------------------------------------------------
 
-const $ = (sel) => document.querySelector(sel);
+const $ = (sel, root = document) => root.querySelector(sel);
 const els = {
   list: $('#itemList'),
   empty: $('#emptyMsg'),
   search: $('#search'),
+  categoryFilter: $('#categoryFilter'),
   lowOnly: $('#lowOnly'),
   stats: $('#stats'),
   addBtn: $('#addBtn'),
-  scanBtn: $('#scanBtn'),
   toast: $('#toast'),
   itemModal: $('#itemModal'),
   itemForm: $('#itemForm'),
   itemTitle: $('#itemModalTitle'),
-  itemCancel: $('#itemCancel'),
+  formScanBtn: $('#formScanBtn'),
+  formBarcode: $('#formBarcode'),
+  imagePreview: $('#imagePreview'),
+  imageClear: $('#imageClear'),
+  imageUrlInput: $('#imageUrlInput'),
+  categoryList: $('#category-list'),
+  packageSizeLabel: $('#packageSizeLabel'),
   detailModal: $('#detailModal'),
   detailContent: $('#detailContent'),
-  detailClose: $('#detailClose'),
   scanModal: $('#scanModal'),
   scanVideo: $('#scanVideo'),
   scanStatus: $('#scanStatus'),
-  scanCamera: $('#scanCamera'),
-  scanClose: $('#scanClose'),
 };
 
-let state = { editingId: null, scanner: null, scanControls: null };
+const state = { editingId: null, scanControls: null, categories: new Set(DEFAULT_CATEGORIES) };
+
+// --- utilities ----------------------------------------------------------
 
 function toast(msg, type = 'info') {
   els.toast.textContent = msg;
@@ -91,6 +104,21 @@ function cardStatus(item) {
   if (Number(item.quantity) <= Number(item.minQuantity)) return 'low';
   return '';
 }
+
+// Wire up [data-close] buttons and backdrop clicks for all dialogs.
+function setupDialogDismissal() {
+  document.querySelectorAll('dialog.modal').forEach((dlg) => {
+    dlg.addEventListener('click', (ev) => {
+      // Backdrop click: target === dialog itself (click outside the form/article).
+      if (ev.target === dlg) dlg.close();
+    });
+    dlg.querySelectorAll('[data-close]').forEach((btn) => {
+      btn.addEventListener('click', () => dlg.close());
+    });
+  });
+}
+
+// --- card rendering -----------------------------------------------------
 
 function renderCard(item) {
   const status = cardStatus(item);
@@ -113,7 +141,7 @@ function renderCard(item) {
     <div class="body">
       <span class="name">${escapeHtml(item.name)}${badge}</span>
       <span class="meta">${meta || escapeHtml(item.category || '')}</span>
-      <div class="qty"><strong>${item.quantity}</strong> ${escapeHtml(item.unit || '')}
+      <div class="qty"><strong>${item.quantity}</strong>
         <span class="meta"> / min ${item.minQuantity}</span>
       </div>
       ${predict}
@@ -140,6 +168,7 @@ async function refresh() {
   const items = await api.list({
     q: els.search.value.trim(),
     low: els.lowOnly.checked ? '1' : '',
+    category: els.categoryFilter.value,
   });
   els.list.innerHTML = '';
   if (!items.length) {
@@ -168,30 +197,128 @@ async function handleAdjust(id, delta) {
   }
 }
 
-// --- add/edit modal ------------------------------------------------------
+// --- categories ---------------------------------------------------------
+
+async function refreshCategories() {
+  const remote = await api.categories();
+  remote.forEach((c) => state.categories.add(c));
+  const sorted = [...state.categories].sort((a, b) => a.localeCompare(b));
+
+  // Datalist for the add-item form
+  els.categoryList.innerHTML = sorted.map((c) => `<option value="${escapeHtml(c)}">`).join('');
+
+  // Category filter dropdown on the list page
+  const prev = els.categoryFilter.value;
+  els.categoryFilter.innerHTML =
+    '<option value="">All categories</option>' +
+    sorted.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+  if (prev && sorted.includes(prev)) els.categoryFilter.value = prev;
+}
+
+// --- image handling -----------------------------------------------------
+
+// Resize an image File down to max 640px on the long side and return a
+// JPEG data URL. Keeps payloads small enough to stash as text in D1.
+async function fileToResizedDataUrl(file) {
+  const img = new Image();
+  img.src = URL.createObjectURL(file);
+  try { await img.decode(); } catch { /* some Safari versions */ }
+  const maxDim = 640;
+  const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(img.width * scale);
+  canvas.height = Math.round(img.height * scale);
+  canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+  const url = canvas.toDataURL('image/jpeg', 0.82);
+  URL.revokeObjectURL(img.src);
+  return url;
+}
+
+function showImage(url) {
+  if (url) {
+    els.imagePreview.innerHTML = `<img src="${escapeHtml(url)}" alt="">`;
+    els.imageClear.hidden = false;
+  } else {
+    els.imagePreview.innerHTML = '<span class="placeholder">No image</span>';
+    els.imageClear.hidden = true;
+  }
+  els.imageUrlInput.value = url || '';
+}
+
+async function handleImageFile(file) {
+  if (!file) return;
+  try {
+    const dataUrl = await fileToResizedDataUrl(file);
+    showImage(dataUrl);
+  } catch (err) {
+    toast('Could not read image: ' + err.message, 'error');
+  }
+}
+
+// --- add/edit modal -----------------------------------------------------
 
 function openItemForm(prefill = {}, editingId = null) {
   state.editingId = editingId;
   els.itemTitle.textContent = editingId ? 'Edit item' : 'Add item';
   const form = els.itemForm;
   form.reset();
+
   for (const [k, v] of Object.entries(prefill)) {
     if (form.elements[k] && v != null) form.elements[k].value = v;
   }
+
+  // Barcode is never a typed input; show it as a chip when we have one.
+  const barcode = prefill.barcode || '';
+  if (barcode) {
+    els.formBarcode.hidden = false;
+    els.formBarcode.innerHTML = `<span class="label">Barcode</span><span class="value">${escapeHtml(barcode)}</span>`;
+    els.formBarcode.dataset.value = barcode;
+  } else {
+    els.formBarcode.hidden = true;
+    els.formBarcode.dataset.value = '';
+  }
+
+  // Package size: only show when populated (from OFF lookup).
+  if (prefill.packageSize) {
+    els.packageSizeLabel.hidden = false;
+  } else {
+    els.packageSizeLabel.hidden = true;
+  }
+
+  showImage(prefill.imageUrl || '');
+
   els.itemModal.showModal();
   form.elements.name.focus();
 }
 
 els.addBtn.addEventListener('click', () => openItemForm());
-els.itemCancel.addEventListener('click', () => els.itemModal.close());
+
+els.imageClear.addEventListener('click', () => showImage(''));
+
+// Both file inputs (capture=environment and plain) funnel to the same handler.
+els.itemForm.querySelectorAll('input[type=file]').forEach((input) => {
+  input.addEventListener('change', async (ev) => {
+    const file = ev.target.files?.[0];
+    if (file) await handleImageFile(file);
+    ev.target.value = ''; // allow re-selecting the same file
+  });
+});
 
 els.itemForm.addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const fd = new FormData(els.itemForm);
-  const body = Object.fromEntries(fd.entries());
+  const body = {
+    name:        fd.get('name'),
+    brand:       fd.get('brand'),
+    category:    fd.get('category'),
+    quantity:    fd.get('quantity'),
+    minQuantity: fd.get('minQuantity'),
+    imageUrl:    fd.get('imageUrl'),
+    packageSize: fd.get('packageSize') || null,
+    barcode:     els.formBarcode.dataset.value || null,
+  };
   ['quantity', 'minQuantity'].forEach((k) => {
-    if (body[k] === '' || body[k] == null) delete body[k];
-    else body[k] = Number(body[k]);
+    body[k] = body[k] === '' || body[k] == null ? undefined : Number(body[k]);
   });
   for (const k of Object.keys(body)) if (body[k] === '') body[k] = null;
 
@@ -204,13 +331,19 @@ els.itemForm.addEventListener('submit', async (ev) => {
       toast('Item added');
     }
     els.itemModal.close();
+    if (body.category) state.categories.add(body.category);
+    await refreshCategories();
     await refresh();
   } catch (err) {
     toast(err.message, 'error');
   }
 });
 
-// --- detail modal --------------------------------------------------------
+// "Scan barcode" button inside the Add-Item form. Launches the scanner;
+// on success we come back to the same form with fields populated.
+els.formScanBtn.addEventListener('click', () => startScanner({ fromForm: true }));
+
+// --- detail modal -------------------------------------------------------
 
 async function openDetail(id) {
   const item = await api.get(id);
@@ -247,7 +380,7 @@ async function openDetail(id) {
       </div>
     </div>
     <div class="detail-grid">
-      <div><span>On hand</span><strong>${item.quantity} ${escapeHtml(item.unit)}</strong></div>
+      <div><span>On hand</span><strong>${item.quantity}</strong></div>
       <div><span>Reorder at</span><strong>${item.minQuantity}</strong></div>
       ${usage}
     </div>
@@ -258,7 +391,6 @@ async function openDetail(id) {
       <button data-act="edit">Edit</button>
       <button class="danger" data-act="delete">Delete</button>
     </div>
-    ${item.notes ? `<p>${escapeHtml(item.notes)}</p>` : ''}
     <div class="history">
       <table>
         <thead><tr><th>When</th><th>Δ</th><th>Reason</th><th>Note</th></tr></thead>
@@ -272,8 +404,6 @@ async function openDetail(id) {
   });
   els.detailModal.showModal();
 }
-
-els.detailClose.addEventListener('click', () => els.detailModal.close());
 
 async function handleDetailAction(item, act) {
   try {
@@ -291,9 +421,9 @@ async function handleDetailAction(item, act) {
       els.detailModal.close();
       openItemForm({
         barcode: item.barcode, name: item.name, brand: item.brand,
-        category: item.category, unit: item.unit,
+        category: item.category,
         minQuantity: item.minQuantity, packageSize: item.packageSize,
-        imageUrl: item.imageUrl, notes: item.notes,
+        imageUrl: item.imageUrl,
       }, item.id);
       return;
     }
@@ -312,39 +442,23 @@ async function handleDetailAction(item, act) {
   }
 }
 
-// --- search --------------------------------------------------------------
+// --- search / filter ----------------------------------------------------
 
 let searchTimer;
 els.search.addEventListener('input', () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(refresh, 180);
 });
+els.categoryFilter.addEventListener('change', refresh);
 els.lowOnly.addEventListener('change', refresh);
 
-// --- barcode scanning ----------------------------------------------------
+// --- barcode scanning ---------------------------------------------------
 
-async function populateCameras() {
-  try {
-    const devices = await ZXingBrowser.BrowserCodeReader.listVideoInputDevices();
-    const prev = els.scanCamera.value;
-    els.scanCamera.innerHTML = '';
-    devices.forEach((d, i) => {
-      const o = document.createElement('option');
-      o.value = d.deviceId;
-      o.textContent = d.label || `Camera ${i + 1}`;
-      // Prefer rear-facing camera on mobile.
-      if (/back|rear|environment/i.test(d.label)) o.selected = true;
-      els.scanCamera.appendChild(o);
-    });
-    if (prev && [...els.scanCamera.options].some((o) => o.value === prev)) {
-      els.scanCamera.value = prev;
-    }
-  } catch (err) {
-    els.scanStatus.textContent = 'Camera unavailable: ' + err.message;
-  }
+function stopScanner() {
+  if (state.scanControls) { state.scanControls.stop(); state.scanControls = null; }
 }
 
-async function startScanner() {
+async function startScanner({ fromForm = false } = {}) {
   if (!window.ZXingBrowser) {
     toast('Scanner library not loaded', 'error');
     return;
@@ -354,67 +468,47 @@ async function startScanner() {
     return;
   }
 
+  // If we were launched from the Add Item form, hide it while the scanner
+  // is visible so iOS doesn't render both dialogs stacked awkwardly.
+  const reopenFormAfter = fromForm;
+  if (fromForm && els.itemModal.open) {
+    els.itemModal.close();
+  }
+
   els.scanModal.showModal();
   els.scanStatus.textContent = 'Starting camera…';
 
   const reader = new ZXingBrowser.BrowserMultiFormatReader();
-  state.scanner = reader;
 
-  const onResult = (result, _err, controls) => {
-    if (result) {
-      controls.stop();
-      handleScanned(result.getText());
-    }
-  };
-
-  // First start uses facingMode rather than a deviceId. iOS Safari returns
-  // placeholder/empty deviceIds before camera permission has been granted,
-  // and passing one of those to decodeFromVideoDevice throws "Invalid
-  // constraint". facingMode sidesteps that and lets the browser pick the
-  // rear camera.
+  // facingMode: environment lets the OS pick the appropriate rear camera.
+  // Avoids the "Invalid constraint" error from passing explicit deviceIds
+  // on iOS, and also gives users the system-level camera experience.
   try {
     state.scanControls = await reader.decodeFromConstraints(
       { video: { facingMode: { ideal: 'environment' } } },
       els.scanVideo,
-      onResult,
+      (result, _err, controls) => {
+        if (result) {
+          controls.stop();
+          handleScanned(result.getText(), { reopenFormAfter });
+        }
+      },
     );
     els.scanStatus.textContent = 'Point the camera at a barcode.';
   } catch (err) {
     els.scanStatus.textContent = 'Camera error: ' + err.message;
-    return;
   }
-
-  // Permission is now granted, so device labels are available - refresh
-  // the picker and wire up switching between cameras.
-  await populateCameras();
-  els.scanCamera.onchange = async () => {
-    const deviceId = els.scanCamera.value;
-    if (!deviceId) return;
-    if (state.scanControls) { state.scanControls.stop(); state.scanControls = null; }
-    els.scanStatus.textContent = 'Switching camera…';
-    try {
-      state.scanControls = await reader.decodeFromVideoDevice(deviceId, els.scanVideo, onResult);
-      els.scanStatus.textContent = 'Point the camera at a barcode.';
-    } catch (err) {
-      els.scanStatus.textContent = 'Camera error: ' + err.message;
-    }
-  };
 }
 
-function stopScanner() {
-  if (state.scanControls) { state.scanControls.stop(); state.scanControls = null; }
-  state.scanner = null;
-}
-
-async function handleScanned(barcode) {
+async function handleScanned(barcode, { reopenFormAfter = false } = {}) {
   els.scanStatus.textContent = `Found ${barcode}. Looking up…`;
   try {
     const { body } = await api.lookup(barcode);
-    els.scanModal.close();
     stopScanner();
+    els.scanModal.close();
 
     if (body.source === 'local' && body.item) {
-      // Already tracked - bump by 1 (purchased)
+      // Already tracked: bump it by 1 as a purchase.
       await api.adjust(body.item.id, 1, 'purchased', 'Scanned');
       toast(`${body.item.name}: +1 purchased`);
       await refresh();
@@ -422,10 +516,9 @@ async function handleScanned(barcode) {
     }
 
     const suggestion = body.suggestion || { barcode };
-    if (!suggestion.name) suggestion.name = '';
     openItemForm({
-      barcode: suggestion.barcode,
-      name: suggestion.name,
+      barcode: suggestion.barcode || barcode,
+      name: suggestion.name || '',
       brand: suggestion.brand || '',
       category: suggestion.category || '',
       packageSize: suggestion.packageSize || '',
@@ -434,16 +527,22 @@ async function handleScanned(barcode) {
       minQuantity: 1,
     });
 
-    if (!suggestion.name) toast('No product data found — fill in manually', 'error');
+    if (!suggestion.name) toast('No product data found — fill in the name', 'error');
   } catch (err) {
     els.scanStatus.textContent = 'Lookup error: ' + err.message;
+    if (reopenFormAfter) {
+      setTimeout(() => {
+        els.scanModal.close();
+        openItemForm({ barcode });
+      }, 1200);
+    }
   }
 }
 
-els.scanBtn.addEventListener('click', startScanner);
-els.scanClose.addEventListener('click', () => { stopScanner(); els.scanModal.close(); });
 els.scanModal.addEventListener('close', stopScanner);
 
-// --- boot ----------------------------------------------------------------
+// --- boot ---------------------------------------------------------------
 
+setupDialogDismissal();
+refreshCategories();
 refresh().catch((err) => toast(err.message, 'error'));
