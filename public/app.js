@@ -326,6 +326,7 @@ els.lowOnly.addEventListener('change', refresh);
 async function populateCameras() {
   try {
     const devices = await ZXingBrowser.BrowserCodeReader.listVideoInputDevices();
+    const prev = els.scanCamera.value;
     els.scanCamera.innerHTML = '';
     devices.forEach((d, i) => {
       const o = document.createElement('option');
@@ -335,6 +336,9 @@ async function populateCameras() {
       if (/back|rear|environment/i.test(d.label)) o.selected = true;
       els.scanCamera.appendChild(o);
     });
+    if (prev && [...els.scanCamera.options].some((o) => o.value === prev)) {
+      els.scanCamera.value = prev;
+    }
   } catch (err) {
     els.scanStatus.textContent = 'Camera unavailable: ' + err.message;
   }
@@ -352,33 +356,49 @@ async function startScanner() {
 
   els.scanModal.showModal();
   els.scanStatus.textContent = 'Starting camera…';
-  await populateCameras();
 
   const reader = new ZXingBrowser.BrowserMultiFormatReader();
   state.scanner = reader;
 
-  const startOnDevice = async (deviceId) => {
-    if (state.scanControls) { state.scanControls.stop(); state.scanControls = null; }
+  const onResult = (result, _err, controls) => {
+    if (result) {
+      controls.stop();
+      handleScanned(result.getText());
+    }
+  };
+
+  // First start uses facingMode rather than a deviceId. iOS Safari returns
+  // placeholder/empty deviceIds before camera permission has been granted,
+  // and passing one of those to decodeFromVideoDevice throws "Invalid
+  // constraint". facingMode sidesteps that and lets the browser pick the
+  // rear camera.
+  try {
+    state.scanControls = await reader.decodeFromConstraints(
+      { video: { facingMode: { ideal: 'environment' } } },
+      els.scanVideo,
+      onResult,
+    );
     els.scanStatus.textContent = 'Point the camera at a barcode.';
+  } catch (err) {
+    els.scanStatus.textContent = 'Camera error: ' + err.message;
+    return;
+  }
+
+  // Permission is now granted, so device labels are available - refresh
+  // the picker and wire up switching between cameras.
+  await populateCameras();
+  els.scanCamera.onchange = async () => {
+    const deviceId = els.scanCamera.value;
+    if (!deviceId) return;
+    if (state.scanControls) { state.scanControls.stop(); state.scanControls = null; }
+    els.scanStatus.textContent = 'Switching camera…';
     try {
-      state.scanControls = await reader.decodeFromVideoDevice(
-        deviceId || undefined,
-        els.scanVideo,
-        (result, err, controls) => {
-          if (result) {
-            const code = result.getText();
-            controls.stop();
-            handleScanned(code);
-          }
-        },
-      );
+      state.scanControls = await reader.decodeFromVideoDevice(deviceId, els.scanVideo, onResult);
+      els.scanStatus.textContent = 'Point the camera at a barcode.';
     } catch (err) {
       els.scanStatus.textContent = 'Camera error: ' + err.message;
     }
   };
-
-  await startOnDevice(els.scanCamera.value);
-  els.scanCamera.onchange = () => startOnDevice(els.scanCamera.value);
 }
 
 function stopScanner() {
