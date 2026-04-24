@@ -72,7 +72,7 @@ const els = {
   imagePreview: $('#imagePreview'),
   imageClear: $('#imageClear'),
   imageUrlInput: $('#imageUrlInput'),
-  categoryList: $('#category-list'),
+  categorySelect: $('#categorySelect'),
   packageSizeLabel: $('#packageSizeLabel'),
   detailModal: $('#detailModal'),
   detailContent: $('#detailContent'),
@@ -204,16 +204,44 @@ async function refreshCategories() {
   remote.forEach((c) => state.categories.add(c));
   const sorted = [...state.categories].sort((a, b) => a.localeCompare(b));
 
-  // Datalist for the add-item form
-  els.categoryList.innerHTML = sorted.map((c) => `<option value="${escapeHtml(c)}">`).join('');
+  // Form select: known categories + "— none —" + "➕ Add new…"
+  const selectPrev = els.categorySelect.value;
+  els.categorySelect.innerHTML =
+    '<option value="">— none —</option>' +
+    sorted.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('') +
+    '<option value="__new__">➕ Add new category…</option>';
+  if (selectPrev && sorted.includes(selectPrev)) els.categorySelect.value = selectPrev;
 
-  // Category filter dropdown on the list page
-  const prev = els.categoryFilter.value;
+  // Toolbar filter: just the known categories.
+  const filterPrev = els.categoryFilter.value;
   els.categoryFilter.innerHTML =
     '<option value="">All categories</option>' +
     sorted.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
-  if (prev && sorted.includes(prev)) els.categoryFilter.value = prev;
+  if (filterPrev && sorted.includes(filterPrev)) els.categoryFilter.value = filterPrev;
 }
+
+// Selecting "Add new…" in the dropdown prompts for a fresh name and
+// inserts it into the list. Cancelling reverts to whatever was selected
+// before.
+let lastCategoryValue = '';
+els.categorySelect?.addEventListener('focus', () => {
+  lastCategoryValue = els.categorySelect.value;
+});
+els.categorySelect?.addEventListener('change', async () => {
+  if (els.categorySelect.value !== '__new__') {
+    lastCategoryValue = els.categorySelect.value;
+    return;
+  }
+  const name = (prompt('New category name:') || '').trim();
+  if (!name) {
+    els.categorySelect.value = lastCategoryValue;
+    return;
+  }
+  state.categories.add(name);
+  await refreshCategories();
+  els.categorySelect.value = name;
+  lastCategoryValue = name;
+});
 
 // --- image handling -----------------------------------------------------
 
@@ -263,9 +291,17 @@ function openItemForm(prefill = {}, editingId = null) {
   const form = els.itemForm;
   form.reset();
 
+  // Make sure a prefilled category exists as an option before we try to
+  // select it - scans can introduce categories we've never seen before.
+  if (prefill.category && !state.categories.has(prefill.category)) {
+    state.categories.add(prefill.category);
+    refreshCategories();
+  }
+
   for (const [k, v] of Object.entries(prefill)) {
     if (form.elements[k] && v != null) form.elements[k].value = v;
   }
+  lastCategoryValue = els.categorySelect.value;
 
   // Barcode is never a typed input; show it as a chip when we have one.
   const barcode = prefill.barcode || '';

@@ -77,8 +77,9 @@
             <input name="brand" type="text" autocomplete="off">
           </label>
           <label>Category
-            <input name="category" type="text" list="category-list" autocomplete="off">
-            <datalist id="category-list"></datalist>
+            <select name="category" id="categorySelect">
+              <option value="">— none —</option>
+            </select>
           </label>
           <label>Quantity
             <input name="quantity" type="number" step="any" value="0" min="0">
