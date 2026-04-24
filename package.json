@@ -1,0 +1,19 @@
+{
+  "name": "household-stock-taker",
+  "version": "0.1.0",
+  "description": "Home inventory tracker with barcode scanning and usage-based restock predictions.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@zxing/browser": "^0.1.5",
+    "@zxing/library": "^0.21.3",
+    "better-sqlite3": "^11.3.0",
+    "express": "^4.21.0"
+  }
+}
