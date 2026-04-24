@@ -11,7 +11,7 @@ not_found_handling = "single-page-application"
 binding = "DB"
 database_name = "household_stock"
 # Fill in with the id printed by `wrangler d1 create household_stock`.
-database_id = "REPLACE_WITH_YOUR_D1_ID"
+database_id = "7cac6f37-1695-42cc-aecc-473d676478ea"
 migrations_dir = "migrations"
 
 [observability]
