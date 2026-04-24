@@ -117,7 +117,7 @@ const els = {
   scanStatus: $('#scanStatus'),
 };
 
-const state = { editingId: null, scanControls: null, categories: new Set(DEFAULT_CATEGORIES) };
+const state = { editingId: null, editingItem: null, scanControls: null, categories: new Set(DEFAULT_CATEGORIES) };
 
 // --- utilities ----------------------------------------------------------
 
@@ -321,8 +321,9 @@ async function handleImageFile(file) {
 
 // --- add/edit modal -----------------------------------------------------
 
-function openItemForm(prefill = {}, editingId = null) {
+function openItemForm(prefill = {}, editingId = null, editingItem = null) {
   state.editingId = editingId;
+  state.editingItem = editingItem;
   els.itemTitle.textContent = editingId ? 'Edit item' : 'Add item';
   const form = els.itemForm;
   form.reset();
@@ -395,7 +396,17 @@ els.itemForm.addEventListener('submit', async (ev) => {
 
   try {
     if (state.editingId) {
-      await api.update(state.editingId, body);
+      // PUT doesn't touch quantity on purpose (quantity changes are
+      // supposed to be logged). Route any edit-form quantity change
+      // through /adjust as a logged "adjustment" instead.
+      const newQty = Number.isFinite(body.quantity) ? body.quantity : null;
+      const oldQty = Number(state.editingItem?.quantity ?? 0);
+      const updateBody = { ...body };
+      delete updateBody.quantity;
+      await api.update(state.editingId, updateBody);
+      if (newQty != null && newQty !== oldQty) {
+        await api.adjust(state.editingId, newQty - oldQty, 'adjustment', 'Edited');
+      }
       toast('Item updated');
     } else {
       await api.create(body);
@@ -493,9 +504,10 @@ async function handleDetailAction(item, act) {
       openItemForm({
         barcode: item.barcode, name: item.name, brand: item.brand,
         category: item.category,
+        quantity: item.quantity,
         minQuantity: item.minQuantity, packageSize: item.packageSize,
         imageUrl: item.imageUrl,
-      }, item.id);
+      }, item.id, item);
       return;
     }
     if (act === 'delete') {
